@@ -10,7 +10,7 @@ import AudioPlayer from '@/components/AudioPlayer';
 import { getCurrentLocation } from '@/lib/geolocation';
 import { findBestNearbyLandmark } from '@/lib/landmarks';
 import { fetchNearbyLandmarks } from '@/lib/api-client';
-import { speakText, pauseSpeaking, resumeSpeaking, stopSpeaking, getSpeakingState } from '@/lib/tts';
+import { primeTTS, speakText, pauseSpeaking, resumeSpeaking, stopSpeaking, getSpeakingState } from '@/lib/tts';
 import { Landmark } from '@/types';
 
 type LocationStatusType = 'idle' | 'requesting' | 'found' | 'error';
@@ -42,6 +42,9 @@ export default function Home() {
   }, [isPlaying]);
 
   const handlePlayClick = async () => {
+    // iOS Safari: unlock speech synthesis while we're still inside the user tap.
+    primeTTS();
+
     if (isPlaying) {
       // If playing, pause
       if (isPaused) {
