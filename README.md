@@ -16,7 +16,7 @@ An instant GPS-based audio tour web application that narrates the history and cu
 ### Prerequisites
 
 - Node.js 18+ installed
-- Foursquare API key ([Get one here](https://developer.foursquare.com/))
+- Foursquare Places API Bearer token ([Get one here](https://developer.foursquare.com/))
 
 ### Installation
 
@@ -29,9 +29,10 @@ npm install
 
 3. Set up environment variables:
    - Create a `.env.local` file in the root directory
-   - Add your Foursquare API key:
+   - Add your Foursquare Places API Bearer token:
 ```
-FOURSQUARE_API_KEY=your_foursquare_api_key_here
+FOURSQUARE_API_KEY=your_foursquare_bearer_token_here
+FOURSQUARE_PLACES_API_VERSION=2025-06-17
 ```
 
    Note: The API key is kept secure on the server side and never exposed to the client.
@@ -98,7 +99,7 @@ Note: GPS location works best on mobile devices. Desktop browsers may have limit
 
 ### No Landmarks Found
 - Try moving to a different location (urban areas work best)
-- Check that your Foursquare API key is correctly configured
+- Check that your Foursquare token is correctly configured
 
 ### Audio Not Playing
 - Ensure your browser supports Web Speech API

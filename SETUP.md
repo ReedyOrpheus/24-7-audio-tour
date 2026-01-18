@@ -10,14 +10,17 @@
 2. **Set up environment variables:**
    Create a `.env.local` file in the root directory with:
    ```
-   FOURSQUARE_API_KEY=your_foursquare_api_key_here
+   # Bearer token used by https://places-api.foursquare.com
+   FOURSQUARE_API_KEY=your_foursquare_bearer_token_here
+   # Version header required by the Places API (matches the developer console examples)
+   FOURSQUARE_PLACES_API_VERSION=2025-06-17
    ```
 
-   To get a Foursquare API key:
+   To get a Foursquare Places API Bearer token:
    - Go to https://developer.foursquare.com/
    - Sign up for a free account
    - Create a new app/project
-   - Copy your API key
+   - Copy the Bearer token shown in the developer console examples
 
 3. **Run the development server:**
    ```bash

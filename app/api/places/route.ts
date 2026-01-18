@@ -1,9 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { searchNearbyPlaces } from '@/lib/foursquare';
 
+// This route depends on request-time query params (lat/lng/radius) and must be dynamic.
+export const dynamic = 'force-dynamic';
+
 // Ensure API key is available
 if (!process.env.FOURSQUARE_API_KEY) {
   console.warn('FOURSQUARE_API_KEY is not set in environment variables');
+} else {
+  // Log that API key is loaded (without exposing the actual key)
+  const keyLength = process.env.FOURSQUARE_API_KEY.length;
+  const keyPrefix = process.env.FOURSQUARE_API_KEY.substring(0, 4);
+  console.log(`FOURSQUARE_API_KEY loaded: ${keyPrefix}... (length: ${keyLength})`);
 }
 
 /**
