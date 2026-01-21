@@ -117,7 +117,8 @@ function getCategoryContext(category: string): string {
 export async function findBestNearbyLandmark(
   coordinates: { lat: number; lng: number },
   radius: number = 1000,
-  fetchLandmarks: (coords: { lat: number; lng: number }, rad: number) => Promise<Landmark[]>
+  fetchLandmarks: (coords: { lat: number; lng: number }, rad: number) => Promise<Landmark[]>,
+  generateNarrative?: (landmark: Landmark) => Promise<string>
 ): Promise<{ landmark: Landmark; narrative: string } | null> {
   try {
     const landmarks = await fetchLandmarks(coordinates, radius);
@@ -132,7 +133,15 @@ export async function findBestNearbyLandmark(
       return null;
     }
 
-    const narrative = generateLandmarkNarrative(bestLandmark);
+    let narrative = generateLandmarkNarrative(bestLandmark);
+    if (generateNarrative) {
+      try {
+        narrative = await generateNarrative(bestLandmark);
+      } catch (err) {
+        // Non-fatal: fall back to deterministic template narrative.
+        console.warn('generateNarrative failed; using template narrative', err);
+      }
+    }
 
     return {
       landmark: bestLandmark,

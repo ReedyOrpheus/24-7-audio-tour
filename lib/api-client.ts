@@ -27,3 +27,26 @@ export async function fetchNearbyLandmarks(
     throw error;
   }
 }
+
+export type NarrativeSource = {
+  title: string;
+  url: string;
+};
+
+export async function fetchNarrative(landmark: Landmark): Promise<{
+  narrative: string;
+  sources: NarrativeSource[];
+  usedLLM: boolean;
+}> {
+  try {
+    const response = await axios.post('/api/narrative', { landmark });
+    return response.data;
+  } catch (error) {
+    if (axios.isAxiosError(error)) {
+      const errorMessage =
+        error.response?.data?.error || error.message || 'Failed to generate narrative';
+      throw new Error(errorMessage);
+    }
+    throw error;
+  }
+}

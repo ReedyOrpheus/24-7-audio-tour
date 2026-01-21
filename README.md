@@ -8,6 +8,7 @@ An instant GPS-based audio tour web application that narrates the history and cu
 - 📍 **GPS Location Detection**: Automatically finds your current location
 - 🗺️ **Foursquare Integration**: Uses Foursquare Places API to find interesting landmarks
 - 🔊 **Text-to-Speech Narration**: Browser-based TTS for immersive audio tours
+- 🧠 **LLM-grounded Scripts (Optional)**: Generates varied tour scripts grounded in public sources (Wikipedia, Wikidata, OpenStreetMap)
 - 📱 **Mobile-First Design**: Optimized for mobile browsers
 - 🎨 **Modern UI**: Clean, dark-themed interface
 
@@ -17,6 +18,7 @@ An instant GPS-based audio tour web application that narrates the history and cu
 
 - Node.js 18+ installed
 - Foursquare Places API Bearer token ([Get one here](https://developer.foursquare.com/))
+- (Optional) OpenAI API key (for LLM-based dynamic tour scripts)
 
 ### Installation
 
@@ -33,6 +35,14 @@ npm install
 ```
 FOURSQUARE_API_KEY=your_foursquare_bearer_token_here
 FOURSQUARE_PLACES_API_VERSION=2025-06-17
+
+# Optional (enables LLM-generated, non-repetitive tour scripts)
+OPENAI_API_KEY=your_openai_api_key_here
+# Optional (defaults to gpt-4o-mini)
+OPENAI_MODEL=gpt-4o-mini
+
+# Optional (recommended): identify your app for public source APIs (OSM/Wikidata etiquette)
+PUBLIC_SOURCES_USER_AGENT=24-7-audio-tour (contact: you@example.com)
 ```
 
    Note: The API key is kept secure on the server side and never exposed to the client.

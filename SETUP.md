@@ -14,6 +14,14 @@
    FOURSQUARE_API_KEY=your_foursquare_bearer_token_here
    # Version header required by the Places API (matches the developer console examples)
    FOURSQUARE_PLACES_API_VERSION=2025-06-17
+
+   # Optional: enable LLM-generated tour scripts (more varied + fact-based)
+   OPENAI_API_KEY=your_openai_api_key_here
+   # Optional (defaults to gpt-4o-mini)
+   OPENAI_MODEL=gpt-4o-mini
+
+   # Optional (recommended): identify your app for public source APIs (OSM/Wikidata etiquette)
+   PUBLIC_SOURCES_USER_AGENT=24-7-audio-tour (contact: you@example.com)
    ```
 
    To get a Foursquare Places API Bearer token:

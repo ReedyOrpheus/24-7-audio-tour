@@ -9,7 +9,7 @@ import LandmarkCard from '@/components/LandmarkCard';
 import AudioPlayer from '@/components/AudioPlayer';
 import { getCurrentLocation } from '@/lib/geolocation';
 import { findBestNearbyLandmark } from '@/lib/landmarks';
-import { fetchNearbyLandmarks } from '@/lib/api-client';
+import { fetchNearbyLandmarks, fetchNarrative, NarrativeSource } from '@/lib/api-client';
 import { primeTTS, speakText, pauseSpeaking, resumeSpeaking, stopSpeaking, getSpeakingState } from '@/lib/tts';
 import { Landmark } from '@/types';
 
@@ -21,6 +21,8 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState(false);
   const [currentLandmark, setCurrentLandmark] = useState<Landmark | null>(null);
   const [narrative, setNarrative] = useState<string | null>(null);
+  const [sources, setSources] = useState<NarrativeSource[]>([]);
+  const [usedLLM, setUsedLLM] = useState<boolean>(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
 
@@ -63,6 +65,8 @@ export default function Home() {
     setLocationError(undefined);
     setCurrentLandmark(null);
     setNarrative(null);
+    setSources([]);
+    setUsedLLM(false);
 
     try {
       // Get current location
@@ -77,7 +81,13 @@ export default function Home() {
       const result = await findBestNearbyLandmark(
         coordinates,
         1000,
-        fetchNearbyLandmarks
+        fetchNearbyLandmarks,
+        async (landmark) => {
+          const r = await fetchNarrative(landmark);
+          setSources(r.sources || []);
+          setUsedLLM(!!r.usedLLM);
+          return r.narrative;
+        }
       );
 
       if (!result) {
@@ -136,6 +146,8 @@ export default function Home() {
     setIsPaused(false);
     setCurrentLandmark(null);
     setNarrative(null);
+    setSources([]);
+    setUsedLLM(false);
   };
 
   return (
@@ -160,6 +172,27 @@ export default function Home() {
       <LocationStatus status={locationStatus} errorMessage={locationError} />
 
       <LandmarkCard landmark={currentLandmark} />
+
+      {currentLandmark && sources.length > 0 && (
+        <div className="mt-3 text-center max-w-2xl mx-auto">
+          <p className="text-xs text-gray-500">
+            {usedLLM ? 'Generated with LLM using public sources:' : 'Public sources found:'}
+          </p>
+          <div className="mt-1 flex flex-wrap items-center justify-center gap-2">
+            {sources.slice(0, 3).map((s) => (
+              <a
+                key={s.url}
+                href={s.url}
+                target="_blank"
+                rel="noreferrer"
+                className="text-xs text-blue-400 hover:text-blue-300 underline underline-offset-2"
+              >
+                {s.title}
+              </a>
+            ))}
+          </div>
+        </div>
+      )}
 
       <AudioPlayer
         landmark={currentLandmark}
