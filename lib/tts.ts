@@ -1,168 +1,182 @@
 /**
- * Text-to-Speech service using Web Speech API
+ * Text-to-Speech service using OpenAI TTS API
+ * Falls back to browser's Web Speech API if OpenAI TTS is unavailable
  */
 
-let currentUtterance: SpeechSynthesisUtterance | null = null;
+let currentAudio: HTMLAudioElement | null = null;
 let isSpeaking = false;
 let isPaused = false;
-let hasPrimedTTS = false;
+let audioBlobUrl: string | null = null;
 
 function isBrowser(): boolean {
   return typeof window !== 'undefined';
 }
 
 /**
- * iOS Safari in particular may require an audio/speech action to be triggered
- * directly from a user gesture (tap). Calling this at the start of the tap
- * handler helps "unlock" speech for later async work (geo + network).
+ * iOS Safari requires audio to be triggered directly from a user gesture.
+ * This function is kept for compatibility but audio playback handles this automatically.
  */
 export function primeTTS(): void {
-  if (!isBrowser() || !('speechSynthesis' in window)) return;
-  if (hasPrimedTTS) return;
-
-  try {
-    // A near-silent, near-instant utterance.
-    const u = new SpeechSynthesisUtterance(' ');
-    u.volume = 0;
-    u.rate = 1.5;
-    u.pitch = 1.0;
-    u.lang = 'en-US';
-
-    // On some browsers, whitespace utterances may never fire events; don't rely on them.
-    window.speechSynthesis.cancel();
-    window.speechSynthesis.speak(u);
-    hasPrimedTTS = true;
-  } catch {
-    // Best-effort priming only.
-  }
-}
-
-async function ensureVoicesLoaded(timeoutMs: number = 1500): Promise<void> {
-  if (!isTTSAvailable()) return;
-
-  const voicesNow = window.speechSynthesis.getVoices();
-  if (voicesNow && voicesNow.length > 0) return;
-
-  await new Promise<void>((resolve) => {
-    let done = false;
-    const finish = () => {
-      if (done) return;
-      done = true;
-      window.speechSynthesis.removeEventListener('voiceschanged', finish);
-      resolve();
-    };
-
-    const t = window.setTimeout(finish, timeoutMs);
-    window.speechSynthesis.addEventListener('voiceschanged', () => {
-      window.clearTimeout(t);
-      finish();
-    });
-  });
+  // No-op for audio-based TTS, but kept for API compatibility
+  // Audio playback will work as long as it's triggered from user interaction
 }
 
 /**
  * Check if text-to-speech is available
  */
 export function isTTSAvailable(): boolean {
-  return typeof window !== 'undefined' && 'speechSynthesis' in window;
+  return typeof window !== 'undefined';
 }
 
 /**
- * Speak text using browser's text-to-speech
+ * Speak text using OpenAI TTS API (with fallback to browser TTS)
  */
 export function speakText(
+  text: string,
+  options: {
+    rate?: number; // Not supported with audio files, kept for compatibility
+    pitch?: number; // Not supported with audio files, kept for compatibility
+    volume?: number;
+    voice?: string; // OpenAI voice name: 'alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'
+  } = {}
+): Promise<void> {
+  return new Promise(async (resolve, reject) => {
+    if (!isBrowser()) {
+      reject(new Error('Text-to-speech is not available'));
+      return;
+    }
+
+    // Stop any current audio
+    stopSpeaking();
+
+    try {
+      // Map 'marin' to 'nova' (closest OpenAI voice)
+      const voice = options.voice === 'marin' ? 'nova' : (options.voice || 'nova');
+
+      // Fetch audio from API route
+      const response = await fetch('/api/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text,
+          voice,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+        console.warn('OpenAI TTS failed, falling back to browser TTS:', errorData.error);
+        
+        // Fallback to browser speech synthesis
+        return fallbackToBrowserTTS(text, options, resolve, reject);
+      }
+
+      // Create audio blob URL
+      const audioBlob = await response.blob();
+      audioBlobUrl = URL.createObjectURL(audioBlob);
+
+      // Create and play audio element
+      const audio = new Audio(audioBlobUrl);
+      currentAudio = audio;
+
+      // Apply volume (rate/pitch not supported with audio files)
+      audio.volume = options.volume ?? 1.0;
+
+      // Handle audio events
+      audio.onended = () => {
+        cleanup();
+        resolve();
+      };
+
+      audio.onerror = (error) => {
+        cleanup();
+        reject(new Error(`Audio playback failed: ${error}`));
+      };
+
+      audio.onpause = () => {
+        // Track pause state
+        if (isSpeaking && !isPaused) {
+          isPaused = true;
+        }
+      };
+
+      audio.onplay = () => {
+        isSpeaking = true;
+        isPaused = false;
+      };
+
+      // Start playback
+      isSpeaking = true;
+      isPaused = false;
+      await audio.play();
+    } catch (error) {
+      console.warn('OpenAI TTS error, falling back to browser TTS:', error);
+      // Fallback to browser speech synthesis
+      return fallbackToBrowserTTS(text, options, resolve, reject);
+    }
+  });
+}
+
+/**
+ * Fallback to browser's Web Speech API if OpenAI TTS fails
+ */
+function fallbackToBrowserTTS(
   text: string,
   options: {
     rate?: number;
     pitch?: number;
     volume?: number;
-    voice?: SpeechSynthesisVoice;
-  } = {}
-): Promise<void> {
-  return new Promise(async (resolve, reject) => {
-    if (!isTTSAvailable()) {
-      reject(new Error('Text-to-speech is not available in this browser'));
-      return;
-    }
+    voice?: string;
+  },
+  resolve: () => void,
+  reject: (error: Error) => void
+): void {
+  if (!isBrowser() || !('speechSynthesis' in window)) {
+    reject(new Error('Text-to-speech is not available in this browser'));
+    return;
+  }
 
-    // Stop any current speech
-    stopSpeaking();
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.rate = options.rate ?? 0.95;
+  utterance.pitch = options.pitch ?? 1.0;
+  utterance.volume = options.volume ?? 1.0;
+  utterance.lang = 'en-US';
 
-    const utterance = new SpeechSynthesisUtterance(text);
-    let didStart = false;
-    
-    // Set options
-    utterance.rate = options.rate ?? 1.0;
-    utterance.pitch = options.pitch ?? 1.0;
-    utterance.volume = options.volume ?? 1.0;
-    utterance.lang = options.voice?.lang ?? 'en-US';
-    
-    if (options.voice) {
-      utterance.voice = options.voice;
-    } else {
-      // Try to find a good default voice
-      await ensureVoicesLoaded();
-      const voices = window.speechSynthesis.getVoices();
-      const preferredVoice = voices.find(
-        (voice) =>
-          voice.lang.startsWith('en') &&
-          (voice.name.includes('Female') ||
-            voice.name.includes('Natural') ||
-            voice.name.includes('Premium'))
-      ) || voices.find((voice) => voice.lang.startsWith('en')) || voices[0];
-      
-      if (preferredVoice) {
-        utterance.voice = preferredVoice;
-      }
-    }
-
-    utterance.onstart = () => {
-      didStart = true;
-    };
-
-    utterance.onend = () => {
-      isSpeaking = false;
-      isPaused = false;
-      currentUtterance = null;
-      resolve();
-    };
-
-    utterance.onerror = (error) => {
-      isSpeaking = false;
-      isPaused = false;
-      currentUtterance = null;
-      reject(error);
-    };
-
-    currentUtterance = utterance;
-    isSpeaking = true;
+  utterance.onend = () => {
+    isSpeaking = false;
     isPaused = false;
-    
-    window.speechSynthesis.speak(utterance);
+    resolve();
+  };
 
-    // Watchdog: on iOS this can fail silently if not triggered by a user gesture.
-    // If speaking never starts, fail fast so the UI can show an error.
-    window.setTimeout(() => {
-      if (!isTTSAvailable()) return;
-      if (currentUtterance !== utterance) return;
-      const synth = window.speechSynthesis;
-      if (!didStart && !synth.speaking && !synth.pending) {
-        stopSpeaking();
-        reject(
-          new Error(
-            'Speech did not start. On iPhone Safari, audio often requires a direct tap to start. Tap Play again.'
-          )
-        );
-      }
-    }, 1200);
-  });
+  utterance.onerror = (error) => {
+    isSpeaking = false;
+    isPaused = false;
+    reject(new Error(`Speech synthesis failed: ${error}`));
+  };
+
+  isSpeaking = true;
+  isPaused = false;
+  window.speechSynthesis.speak(utterance);
+}
+
+/**
+ * Cleanup audio resources
+ */
+function cleanup(): void {
+  if (audioBlobUrl) {
+    URL.revokeObjectURL(audioBlobUrl);
+    audioBlobUrl = null;
+  }
+  currentAudio = null;
+  isSpeaking = false;
+  isPaused = false;
 }
 
 /**
  * Pause current speech
  */
 export function pauseSpeaking(): void {
-  if (!isTTSAvailable() || !isSpeaking) {
+  if (!isBrowser() || !isSpeaking) {
     return;
   }
 
@@ -170,15 +184,25 @@ export function pauseSpeaking(): void {
     return;
   }
 
-  window.speechSynthesis.pause();
-  isPaused = true;
+  // Try audio first
+  if (currentAudio) {
+    currentAudio.pause();
+    isPaused = true;
+    return;
+  }
+
+  // Fallback to browser TTS
+  if ('speechSynthesis' in window) {
+    window.speechSynthesis.pause();
+    isPaused = true;
+  }
 }
 
 /**
  * Resume paused speech
  */
 export function resumeSpeaking(): void {
-  if (!isTTSAvailable() || !isSpeaking) {
+  if (!isBrowser() || !isSpeaking) {
     return;
   }
 
@@ -186,22 +210,42 @@ export function resumeSpeaking(): void {
     return;
   }
 
-  window.speechSynthesis.resume();
-  isPaused = false;
+  // Try audio first
+  if (currentAudio) {
+    currentAudio.play();
+    isPaused = false;
+    return;
+  }
+
+  // Fallback to browser TTS
+  if ('speechSynthesis' in window) {
+    window.speechSynthesis.resume();
+    isPaused = false;
+  }
 }
 
 /**
  * Stop current speech
  */
 export function stopSpeaking(): void {
-  if (!isTTSAvailable()) {
+  if (!isBrowser()) {
     return;
   }
 
-  window.speechSynthesis.cancel();
+  // Stop audio playback
+  if (currentAudio) {
+    currentAudio.pause();
+    currentAudio.currentTime = 0;
+    cleanup();
+  }
+
+  // Stop browser TTS
+  if ('speechSynthesis' in window) {
+    window.speechSynthesis.cancel();
+  }
+
   isSpeaking = false;
   isPaused = false;
-  currentUtterance = null;
 }
 
 /**
@@ -211,6 +255,12 @@ export function getSpeakingState(): {
   isSpeaking: boolean;
   isPaused: boolean;
 } {
+  // Update state from audio element if available
+  if (currentAudio) {
+    isSpeaking = !currentAudio.paused && !currentAudio.ended && currentAudio.currentTime > 0;
+    isPaused = currentAudio.paused && currentAudio.currentTime > 0;
+  }
+
   return {
     isSpeaking,
     isPaused,
@@ -218,10 +268,10 @@ export function getSpeakingState(): {
 }
 
 /**
- * Get available voices
+ * Get available voices (for browser TTS fallback)
  */
 export function getAvailableVoices(): SpeechSynthesisVoice[] {
-  if (!isTTSAvailable()) {
+  if (!isBrowser() || !('speechSynthesis' in window)) {
     return [];
   }
   return window.speechSynthesis.getVoices();

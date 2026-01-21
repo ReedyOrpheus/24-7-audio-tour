@@ -107,6 +107,7 @@ export default function Home() {
       setIsPaused(false);
 
       await speakText(result.narrative, {
+        voice: 'marin', // Uses OpenAI TTS 'nova' voice (marin maps to nova)
         rate: 0.95,
         pitch: 1.0,
         volume: 1.0,

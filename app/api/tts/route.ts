@@ -1,0 +1,77 @@
+import { NextRequest, NextResponse } from 'next/server';
+
+export const dynamic = 'force-dynamic';
+
+/**
+ * API route to generate speech audio using OpenAI TTS API
+ * This keeps the API key secure on the server side
+ */
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.json().catch(() => null);
+    const text = body?.text;
+    const voice = body?.voice || 'alloy'; // Default to 'alloy' if not specified
+
+    if (!text || typeof text !== 'string') {
+      return NextResponse.json(
+        { error: 'Text is required' },
+        { status: 400 }
+      );
+    }
+
+    const apiKey = process.env.OPENAI_API_KEY?.trim();
+    if (!apiKey) {
+      return NextResponse.json(
+        { error: 'OPENAI_API_KEY not configured' },
+        { status: 500 }
+      );
+    }
+
+    // Validate voice (OpenAI TTS supports: alloy, echo, fable, onyx, nova, shimmer)
+    // Note: If 'marin' is not a standard voice, we'll use 'nova' as fallback
+    const validVoices = ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'];
+    const selectedVoice = validVoices.includes(voice.toLowerCase()) 
+      ? voice.toLowerCase() 
+      : 'nova'; // Default to 'nova' if invalid voice specified
+
+    // Call OpenAI TTS API
+    const response = await fetch('https://api.openai.com/v1/audio/speech', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'tts-1', // Use 'tts-1-hd' for higher quality (2x cost)
+        input: text,
+        voice: selectedVoice,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => 'Unknown error');
+      console.error('OpenAI TTS API error:', response.status, errorText);
+      return NextResponse.json(
+        { error: `OpenAI TTS failed: ${response.status} ${errorText}` },
+        { status: response.status }
+      );
+    }
+
+    // Return the audio as a blob
+    const audioBuffer = await response.arrayBuffer();
+    return new NextResponse(audioBuffer, {
+      headers: {
+        'Content-Type': 'audio/mpeg',
+        'Cache-Control': 'public, max-age=3600', // Cache for 1 hour
+      },
+    });
+  } catch (error) {
+    console.error('TTS generation error:', error);
+    const errorMessage =
+      error instanceof Error ? error.message : 'Unknown error occurred';
+    return NextResponse.json(
+      { error: errorMessage },
+      { status: 500 }
+    );
+  }
+}
