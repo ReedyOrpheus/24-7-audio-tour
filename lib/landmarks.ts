@@ -1,8 +1,16 @@
 import { Landmark } from '@/types';
 
 /**
+ * Significance threshold for filtering landmarks
+ * Only landmarks with significance >= this value will be considered
+ * Default: 30 (moderate significance)
+ */
+const SIGNIFICANCE_THRESHOLD = 30;
+
+/**
  * Select the most interesting landmark from a list
  * Prioritizes: rating, distance, category relevance
+ * @deprecated Use selectBestLandmarkWithSignificance instead
  */
 export function selectBestLandmark(landmarks: Landmark[]): Landmark | null {
   if (landmarks.length === 0) {
@@ -46,6 +54,43 @@ export function selectBestLandmark(landmarks: Landmark[]): Landmark | null {
   // Sort by score (highest first) and return the best one
   scored.sort((a, b) => b.score - a.score);
   return scored[0].landmark;
+}
+
+/**
+ * Select the best landmark from a list based on significance threshold
+ * Filters landmarks by significance score, then selects the closest one
+ * 
+ * @param landmarks - List of landmarks to choose from
+ * @param significanceScores - Map of landmark IDs to their significance scores (0-100)
+ * @param threshold - Minimum significance score required (default: SIGNIFICANCE_THRESHOLD)
+ * @returns The closest landmark that meets the significance threshold, or null if none found
+ */
+export function selectBestLandmarkWithSignificance(
+  landmarks: Landmark[],
+  significanceScores: Map<string, number>,
+  threshold: number = SIGNIFICANCE_THRESHOLD
+): Landmark | null {
+  if (landmarks.length === 0) {
+    return null;
+  }
+
+  // Filter landmarks by significance threshold
+  const significantLandmarks = landmarks.filter((landmark) => {
+    const score = significanceScores.get(landmark.id) || 0;
+    return score >= threshold;
+  });
+
+  // If no landmarks meet the threshold, return null
+  if (significantLandmarks.length === 0) {
+    return null;
+  }
+
+  // Among significant landmarks, select the closest one
+  const closest = significantLandmarks.reduce((closest, current) => {
+    return current.distance < closest.distance ? current : closest;
+  });
+
+  return closest;
 }
 
 /**
@@ -113,12 +158,21 @@ function getCategoryContext(category: string): string {
 /**
  * Find and select the best nearby landmark
  * This function should be called from client-side code and will use the API route
+ * 
+ * @param coordinates - User's current location
+ * @param radius - Search radius in meters
+ * @param fetchLandmarks - Function to fetch nearby landmarks
+ * @param generateNarrative - Optional function to generate narrative
+ * @param scoreSignificance - Function to score landmarks for significance (batch scoring)
+ * @param significanceThreshold - Minimum significance score required (default: 30)
  */
 export async function findBestNearbyLandmark(
   coordinates: { lat: number; lng: number },
   radius: number = 1000,
   fetchLandmarks: (coords: { lat: number; lng: number }, rad: number) => Promise<Landmark[]>,
-  generateNarrative?: (landmark: Landmark) => Promise<string>
+  generateNarrative?: (landmark: Landmark) => Promise<string>,
+  scoreSignificance?: (landmarks: Landmark[]) => Promise<Array<{ landmark: Landmark; score: number }>>,
+  significanceThreshold: number = SIGNIFICANCE_THRESHOLD
 ): Promise<{ landmark: Landmark; narrative: string } | null> {
   try {
     const landmarks = await fetchLandmarks(coordinates, radius);
@@ -127,7 +181,45 @@ export async function findBestNearbyLandmark(
       return null;
     }
 
-    const bestLandmark = selectBestLandmark(landmarks);
+    let bestLandmark: Landmark | null = null;
+
+    // If significance scoring is available, use it to filter and select
+    if (scoreSignificance) {
+      try {
+        // Score all landmarks in batch for efficiency
+        const scoredResults = await scoreSignificance(landmarks);
+        
+        // Create a map of landmark ID to significance score
+        const significanceScores = new Map<string, number>();
+        scoredResults.forEach(({ landmark, score }) => {
+          significanceScores.set(landmark.id, score);
+        });
+
+        // Select the closest landmark that meets the significance threshold
+        bestLandmark = selectBestLandmarkWithSignificance(
+          landmarks,
+          significanceScores,
+          significanceThreshold
+        );
+
+        // If no landmark meets the threshold, try lowering it slightly
+        if (!bestLandmark && significanceThreshold > 20) {
+          console.log(`No landmarks met significance threshold ${significanceThreshold}, trying lower threshold`);
+          bestLandmark = selectBestLandmarkWithSignificance(
+            landmarks,
+            significanceScores,
+            Math.max(20, significanceThreshold - 10)
+          );
+        }
+      } catch (err) {
+        // Non-fatal: fall back to old selection method
+        console.warn('Significance scoring failed; falling back to basic selection', err);
+        bestLandmark = selectBestLandmark(landmarks);
+      }
+    } else {
+      // Fallback to old selection method if scoring function not provided
+      bestLandmark = selectBestLandmark(landmarks);
+    }
     
     if (!bestLandmark) {
       return null;

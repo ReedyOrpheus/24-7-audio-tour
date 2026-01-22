@@ -9,7 +9,7 @@ import LandmarkCard from '@/components/LandmarkCard';
 import AudioPlayer from '@/components/AudioPlayer';
 import { getCurrentLocation } from '@/lib/geolocation';
 import { findBestNearbyLandmark } from '@/lib/landmarks';
-import { fetchNearbyLandmarks, fetchNarrative, NarrativeSource } from '@/lib/api-client';
+import { fetchNearbyLandmarks, fetchNarrative, scoreLandmarksSignificance, NarrativeSource } from '@/lib/api-client';
 import { primeTTS, speakText, pauseSpeaking, resumeSpeaking, stopSpeaking, getSpeakingState } from '@/lib/tts';
 import { Landmark } from '@/types';
 
@@ -77,7 +77,7 @@ export default function Home() {
 
       setLocationStatus('found');
 
-      // Find nearby landmark using API route
+      // Find nearby landmark using API route with significance scoring
       const result = await findBestNearbyLandmark(
         coordinates,
         1000,
@@ -87,7 +87,9 @@ export default function Home() {
           setSources(r.sources || []);
           setUsedLLM(!!r.usedLLM);
           return r.narrative;
-        }
+        },
+        scoreLandmarksSignificance, // Pass significance scoring function
+        30 // Significance threshold (0-100)
       );
 
       if (!result) {

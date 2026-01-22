@@ -50,3 +50,42 @@ export async function fetchNarrative(landmark: Landmark): Promise<{
     throw error;
   }
 }
+
+/**
+ * Score a single landmark's touristic significance (0-100)
+ */
+export async function scoreLandmarkSignificance(landmark: Landmark): Promise<number> {
+  try {
+    const response = await axios.post('/api/significance', { landmark });
+    return response.data.score || 0;
+  } catch (error) {
+    if (axios.isAxiosError(error)) {
+      console.warn('Failed to score landmark significance:', error.message);
+      return 0; // Return 0 on error to allow fallback behavior
+    }
+    return 0;
+  }
+}
+
+/**
+ * Score multiple landmarks in batch (more efficient than individual calls)
+ */
+export async function scoreLandmarksSignificance(
+  landmarks: Landmark[]
+): Promise<Array<{ landmark: Landmark; score: number }>> {
+  if (landmarks.length === 0) {
+    return [];
+  }
+
+  try {
+    const response = await axios.put('/api/significance', { landmarks });
+    return response.data.results || [];
+  } catch (error) {
+    if (axios.isAxiosError(error)) {
+      console.warn('Failed to score landmarks significance:', error.message);
+      // Return all landmarks with score 0 as fallback
+      return landmarks.map((landmark) => ({ landmark, score: 0 }));
+    }
+    return landmarks.map((landmark) => ({ landmark, score: 0 }));
+  }
+}
