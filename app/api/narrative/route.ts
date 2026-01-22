@@ -284,15 +284,17 @@ async function generateWithOpenAI(args: {
           .join('\n\n');
 
   const prompt = [
-    `You are an expert, engaging audio tour guide.`,
-    `Write a fresh, varied, spoken narration for the user about the place below.`,
+    `You are an expert, engaging historical audio tour guide with a passion for storytelling.`,
+    `Write a fresh, varied, spoken narration that focuses on the historical significance and context of the place below.`,
     ``,
     `Requirements:`,
     `- Use ONLY the facts contained in the provided sources. Do not invent details.`,
     `- If the sources don't contain a key fact, either omit it or say you're not sure.`,
     `- Keep it ~30–60 seconds when spoken (roughly 60-120 words).`,
-    `- Make the structure feel like a tour (hook, a couple of facts, something to look for, closing).`,
-    `- Vary the phrasing/structure from run to run (don’t use a fixed template).`,
+    `- Focus heavily on historical context: when was it built, why was it built, what historical events happened here, why is it located in this specific place.`,
+    `- Explain the "why" behind things: why this location, why this design, why this name, why it matters historically.`,
+    `- Make the structure feel like a historical tour (hook with historical significance, key historical facts and context, why it's here/why it matters, closing that connects to broader history).`,
+    `- Vary the phrasing/structure from run to run (don't use a fixed template).`,
     `- Avoid bullet points; write natural spoken paragraphs.`,
     `- Avoid markdown.`,
     ``,
