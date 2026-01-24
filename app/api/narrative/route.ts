@@ -21,6 +21,38 @@ const PUBLIC_SOURCES_USER_AGENT =
   process.env.PUBLIC_SOURCES_USER_AGENT?.trim() ||
   '24-7-audio-tour (Next.js demo; set PUBLIC_SOURCES_USER_AGENT)';
 
+// Timeout constants for performance optimization
+const SOURCE_FETCH_TIMEOUT_MS = 3000; // 3 seconds max per source fetch
+const WIKIDATA_TIMEOUT_MS = 2000; // 2 seconds for Wikidata (slowest)
+const LLM_GENERATION_TIMEOUT_MS = 8000; // 8 seconds max for LLM
+
+/**
+ * Fetch with timeout wrapper
+ */
+async function fetchWithTimeout(
+  url: string,
+  options: RequestInit & { timeout?: number } = {}
+): Promise<Response> {
+  const timeout = options.timeout || SOURCE_FETCH_TIMEOUT_MS;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    return response;
+  } catch (error) {
+    clearTimeout(timeoutId);
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error(`Request timeout after ${timeout}ms`);
+    }
+    throw error;
+  }
+}
+
 function safeJson<T>(value: unknown): T | null {
   try {
     return value as T;
@@ -50,80 +82,99 @@ function dedupeSources(sources: NarrativeSource[]): NarrativeSource[] {
 }
 
 async function fetchWikipediaContext(query: string): Promise<NarrativeSource[]> {
-  // Wikipedia API (no key). We intentionally keep this lightweight: 1–3 top hits.
-  const searchUrl =
-    'https://en.wikipedia.org/w/api.php?action=query&list=search&format=json&srlimit=3&srsearch=' +
-    encodeURIComponent(query);
+  try {
+    // Wikipedia API (no key). Reduced to 2 top hits for faster fetching.
+    const searchUrl =
+      'https://en.wikipedia.org/w/api.php?action=query&list=search&format=json&srlimit=2&srsearch=' +
+      encodeURIComponent(query);
 
-  const searchRes = await fetch(searchUrl, {
-    headers: { Accept: 'application/json' },
-    // cache a bit to reduce repeated requests during testing
-    next: { revalidate: SOURCE_REVALIDATE_SECONDS },
-  });
-
-  if (!searchRes.ok) return [];
-  const searchJson = (await searchRes.json()) as any;
-  const results = searchJson?.query?.search as Array<{ title: string }> | undefined;
-  if (!results || results.length === 0) return [];
-
-  const sources: NarrativeSource[] = [];
-
-  for (const r of results.slice(0, 3)) {
-    const title = r.title;
-    if (!title) continue;
-
-    const summaryUrl =
-      'https://en.wikipedia.org/api/rest_v1/page/summary/' +
-      encodeURIComponent(title);
-
-    const summaryRes = await fetch(summaryUrl, {
+    const searchRes = await fetchWithTimeout(searchUrl, {
       headers: { Accept: 'application/json' },
+      timeout: SOURCE_FETCH_TIMEOUT_MS,
+      // cache a bit to reduce repeated requests during testing
       next: { revalidate: SOURCE_REVALIDATE_SECONDS },
+    } as any);
+
+    if (!searchRes.ok) return [];
+    const searchJson = (await searchRes.json()) as any;
+    const results = searchJson?.query?.search as Array<{ title: string }> | undefined;
+    if (!results || results.length === 0) return [];
+
+    const sources: NarrativeSource[] = [];
+
+    // Fetch summaries in parallel for better performance
+    const summaryPromises = results.slice(0, 2).map(async (r) => {
+      const title = r.title;
+      if (!title) return null;
+
+      try {
+        const summaryUrl =
+          'https://en.wikipedia.org/api/rest_v1/page/summary/' +
+          encodeURIComponent(title);
+
+        const summaryRes = await fetchWithTimeout(summaryUrl, {
+          headers: { Accept: 'application/json' },
+          timeout: SOURCE_FETCH_TIMEOUT_MS,
+          next: { revalidate: SOURCE_REVALIDATE_SECONDS },
+        } as any);
+
+        if (!summaryRes.ok) return null;
+        const summaryJson = (await summaryRes.json()) as any;
+
+        const pageUrl: string | undefined =
+          summaryJson?.content_urls?.desktop?.page ||
+          summaryJson?.content_urls?.mobile?.page;
+        const extract: string | undefined = summaryJson?.extract;
+        const type: string | undefined = summaryJson?.type; // may be "disambiguation"
+
+        // Skip pure disambiguation pages unless we have at least some extract.
+        if (type === 'disambiguation' && !extract) return null;
+        if (!pageUrl) return null;
+
+        const source: NarrativeSource = {
+          title,
+          url: pageUrl,
+        };
+        if (extract) {
+          source.excerpt = extract;
+        }
+        return source;
+      } catch (error) {
+        // Silently skip failed requests
+        return null;
+      }
     });
 
-    if (!summaryRes.ok) continue;
-    const summaryJson = (await summaryRes.json()) as any;
-
-    const pageUrl: string | undefined =
-      summaryJson?.content_urls?.desktop?.page ||
-      summaryJson?.content_urls?.mobile?.page;
-    const extract: string | undefined = summaryJson?.extract;
-    const type: string | undefined = summaryJson?.type; // may be "disambiguation"
-
-    // Skip pure disambiguation pages unless we have at least some extract.
-    if (type === 'disambiguation' && !extract) continue;
-    if (!pageUrl) continue;
-
-    sources.push({
-      title,
-      url: pageUrl,
-      excerpt: extract,
-    });
+    const summaryResults = await Promise.all(summaryPromises);
+    return summaryResults.filter((s): s is NarrativeSource => s !== null && s !== undefined);
+  } catch (error) {
+    // Return empty array on timeout or error
+    return [];
   }
-
-  return sources;
 }
 
 async function fetchOpenStreetMapContext(landmark: Landmark): Promise<NarrativeSource[]> {
-  // Nominatim usage policy asks for a proper User-Agent identifying the application.
-  // Keep requests minimal and cache.
-  const url =
-    'https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=' +
-    encodeURIComponent(String(landmark.location.lat)) +
-    '&lon=' +
-    encodeURIComponent(String(landmark.location.lng)) +
-    '&zoom=18&addressdetails=1&extratags=1&namedetails=1';
+  try {
+    // Nominatim usage policy asks for a proper User-Agent identifying the application.
+    // Keep requests minimal and cache.
+    const url =
+      'https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=' +
+      encodeURIComponent(String(landmark.location.lat)) +
+      '&lon=' +
+      encodeURIComponent(String(landmark.location.lng)) +
+      '&zoom=18&addressdetails=1&extratags=1&namedetails=1';
 
-  const res = await fetch(url, {
-    headers: {
-      Accept: 'application/json',
-      'User-Agent': PUBLIC_SOURCES_USER_AGENT,
-    },
-    next: { revalidate: SOURCE_REVALIDATE_SECONDS },
-  });
+    const res = await fetchWithTimeout(url, {
+      headers: {
+        Accept: 'application/json',
+        'User-Agent': PUBLIC_SOURCES_USER_AGENT,
+      },
+      timeout: SOURCE_FETCH_TIMEOUT_MS,
+      next: { revalidate: SOURCE_REVALIDATE_SECONDS },
+    } as any);
 
-  if (!res.ok) return [];
-  const json = (await res.json()) as any;
+    if (!res.ok) return [];
+    const json = (await res.json()) as any;
 
   const osmType: string | undefined = json?.osm_type; // "node" | "way" | "relation"
   const osmId: number | undefined = json?.osm_id;
@@ -166,100 +217,63 @@ async function fetchOpenStreetMapContext(landmark: Landmark): Promise<NarrativeS
     extratags: selectedExtras,
   };
 
-  return [
-    {
-      title: 'OpenStreetMap (Nominatim)',
-      url: osmUrl,
-      excerpt: JSON.stringify(excerptObj),
-    },
-  ];
+    return [
+      {
+        title: 'OpenStreetMap (Nominatim)',
+        url: osmUrl,
+        excerpt: JSON.stringify(excerptObj),
+      },
+    ];
+  } catch (error) {
+    // Return empty array on timeout or error
+    return [];
+  }
 }
 
 async function fetchWikidataContext(query: string): Promise<NarrativeSource[]> {
-  const searchUrl =
-    'https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=2&search=' +
-    encodeURIComponent(query);
+  try {
+    const searchUrl =
+      'https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=' +
+      encodeURIComponent(query);
 
-  const searchRes = await fetch(searchUrl, {
-    headers: { Accept: 'application/json' },
-    next: { revalidate: SOURCE_REVALIDATE_SECONDS },
-  });
-  if (!searchRes.ok) return [];
+    const searchRes = await fetchWithTimeout(searchUrl, {
+      headers: { Accept: 'application/json' },
+      timeout: WIKIDATA_TIMEOUT_MS,
+      next: { revalidate: SOURCE_REVALIDATE_SECONDS },
+    } as any);
+    if (!searchRes.ok) return [];
 
-  const searchJson = (await searchRes.json()) as any;
-  const results = searchJson?.search as Array<{
-    id: string;
-    label?: string;
-    description?: string;
-    url?: string;
-  }> | undefined;
-  if (!results || results.length === 0) return [];
+    const searchJson = (await searchRes.json()) as any;
+    const results = searchJson?.search as Array<{
+      id: string;
+      label?: string;
+      description?: string;
+      url?: string;
+    }> | undefined;
+    if (!results || results.length === 0) return [];
 
-  const out: NarrativeSource[] = [];
+    const out: NarrativeSource[] = [];
 
-  for (const r of results.slice(0, 2)) {
-    const qid = r.id;
-    if (!qid) continue;
-
-    const entityUrl = `https://www.wikidata.org/wiki/${encodeURIComponent(qid)}`;
-
-    // Pull a few common properties with labels via SPARQL (kept small).
-    const sparql = `
-SELECT ?officialWebsite ?inception ?architectLabel ?countryLabel ?locatedInLabel ?heritageLabel WHERE {
-  BIND(wd:${qid} AS ?item)
-  OPTIONAL { ?item wdt:P856 ?officialWebsite. }
-  OPTIONAL { ?item wdt:P571 ?inception. }
-  OPTIONAL { ?item wdt:P84 ?architect. }
-  OPTIONAL { ?item wdt:P17 ?country. }
-  OPTIONAL { ?item wdt:P131 ?locatedIn. }
-  OPTIONAL { ?item wdt:P1435 ?heritage. }
-  SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
-}
-LIMIT 1
-`.trim();
-
-    const sparqlUrl =
-      'https://query.wikidata.org/sparql?format=json&query=' + encodeURIComponent(sparql);
-
-    let facts: Record<string, unknown> = {};
-    try {
-      const factsRes = await fetch(sparqlUrl, {
-        headers: {
-          Accept: 'application/sparql-results+json',
-          'User-Agent': PUBLIC_SOURCES_USER_AGENT,
-        },
-        next: { revalidate: SOURCE_REVALIDATE_SECONDS },
+    // Only process first result and skip SPARQL query for speed
+    // SPARQL queries are slow and often timeout
+    const r = results[0];
+    if (r?.id) {
+      const entityUrl = `https://www.wikidata.org/wiki/${encodeURIComponent(r.id)}`;
+      out.push({
+        title: `Wikidata: ${r.label || r.id}`,
+        url: entityUrl,
+        excerpt: JSON.stringify({
+          label: r.label,
+          description: r.description,
+        }),
       });
-
-      if (factsRes.ok) {
-        const factsJson = (await factsRes.json()) as any;
-        const bindings = factsJson?.results?.bindings?.[0] as any;
-        const getVal = (key: string) => bindings?.[key]?.value as string | undefined;
-        facts = {
-          officialWebsite: getVal('officialWebsite'),
-          inception: getVal('inception'),
-          architect: getVal('architectLabel'),
-          country: getVal('countryLabel'),
-          locatedIn: getVal('locatedInLabel'),
-          heritageDesignation: getVal('heritageLabel'),
-        };
-      }
-    } catch {
-      // Best-effort; proceed with whatever we have.
     }
 
-    out.push({
-      title: `Wikidata: ${r.label || qid}`,
-      url: entityUrl,
-      excerpt: JSON.stringify({
-        label: r.label,
-        description: r.description,
-        facts,
-      }),
-    });
+    return out;
+  } catch (error) {
+    // Return empty array on timeout or error - Wikidata is optional
+    return [];
   }
-
-  return out;
 }
 
 async function generateWithOpenAI(args: {
@@ -312,35 +326,49 @@ async function generateWithOpenAI(args: {
     .filter(Boolean)
     .join('\n');
 
-  const res = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: 'system', content: 'You write accurate, delightful tour narrations.' },
-        { role: 'user', content: prompt },
-      ],
-      temperature: 0.9,
-      max_tokens: 450,
-    }),
-  });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), LLM_GENERATION_TIMEOUT_MS);
 
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(`OpenAI request failed: ${res.status} ${res.statusText} ${text}`);
+  try {
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      signal: controller.signal,
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: 'system', content: 'You write accurate, delightful tour narrations.' },
+          { role: 'user', content: prompt },
+        ],
+        temperature: 0.9,
+        max_tokens: 450,
+      }),
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`OpenAI request failed: ${res.status} ${res.statusText} ${text}`);
+    }
+
+    const json = (await res.json()) as any;
+    const content: string | undefined = json?.choices?.[0]?.message?.content;
+    if (!content || typeof content !== 'string') {
+      throw new Error('OpenAI response did not contain message content');
+    }
+
+    return content.trim();
+  } catch (error) {
+    clearTimeout(timeoutId);
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error(`LLM generation timeout after ${LLM_GENERATION_TIMEOUT_MS}ms`);
+    }
+    throw error;
   }
-
-  const json = (await res.json()) as any;
-  const content: string | undefined = json?.choices?.[0]?.message?.content;
-  if (!content || typeof content !== 'string') {
-    throw new Error('OpenAI response did not contain message content');
-  }
-
-  return content.trim();
 }
 
 export async function POST(request: NextRequest) {
@@ -356,6 +384,8 @@ export async function POST(request: NextRequest) {
     }
 
     const query = buildWikipediaQuery(landmark);
+    
+    // Fetch sources in parallel - each has its own timeout, so slow ones won't block
     const [wikiSources, osmSources, wikidataSources] = await Promise.all([
       fetchWikipediaContext(query),
       fetchOpenStreetMapContext(landmark),

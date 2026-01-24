@@ -2,6 +2,35 @@ import { NextRequest, NextResponse } from 'next/server';
 
 export const dynamic = 'force-dynamic';
 
+const TTS_TIMEOUT_MS = 10000; // 10 seconds max for TTS generation
+
+/**
+ * Fetch with timeout wrapper
+ */
+async function fetchWithTimeout(
+  url: string,
+  options: RequestInit & { timeout?: number } = {}
+): Promise<Response> {
+  const timeout = options.timeout || TTS_TIMEOUT_MS;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    return response;
+  } catch (error) {
+    clearTimeout(timeoutId);
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error(`Request timeout after ${timeout}ms`);
+    }
+    throw error;
+  }
+}
+
 /**
  * API route to generate speech audio using OpenAI TTS API
  * This keeps the API key secure on the server side
@@ -34,13 +63,14 @@ export async function POST(request: NextRequest) {
       ? voice.toLowerCase() 
       : 'nova'; // Default to 'nova' if invalid voice specified
 
-    // Call OpenAI TTS API
-    const response = await fetch('https://api.openai.com/v1/audio/speech', {
+    // Call OpenAI TTS API with timeout
+    const response = await fetchWithTimeout('https://api.openai.com/v1/audio/speech', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
+      timeout: TTS_TIMEOUT_MS,
       body: JSON.stringify({
         model: 'tts-1', // Use 'tts-1-hd' for higher quality (2x cost)
         input: text,
