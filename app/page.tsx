@@ -9,7 +9,7 @@ import LandmarkCard from '@/components/LandmarkCard';
 import AudioPlayer from '@/components/AudioPlayer';
 import { getCurrentLocation } from '@/lib/geolocation';
 import { findBestNearbyLandmark } from '@/lib/landmarks';
-import { fetchNearbyLandmarks, fetchNarrative, scoreLandmarksSignificance, NarrativeSource } from '@/lib/api-client';
+import { fetchNearbyLandmarks, fetchNarrative, scoreLandmarksSignificance, fetchAreaNarrative, NarrativeSource } from '@/lib/api-client';
 import { primeTTS, speakText, pauseSpeaking, resumeSpeaking, stopSpeaking, getSpeakingState } from '@/lib/tts';
 import { Landmark } from '@/types';
 
@@ -20,6 +20,7 @@ export default function Home() {
   const [locationError, setLocationError] = useState<string | undefined>(undefined);
   const [isLoading, setIsLoading] = useState(false);
   const [currentLandmark, setCurrentLandmark] = useState<Landmark | null>(null);
+  const [areaName, setAreaName] = useState<string | null>(null);
   const [narrative, setNarrative] = useState<string | null>(null);
   const [sources, setSources] = useState<NarrativeSource[]>([]);
   const [usedLLM, setUsedLLM] = useState<boolean>(false);
@@ -64,6 +65,7 @@ export default function Home() {
     setLocationStatus('requesting');
     setLocationError(undefined);
     setCurrentLandmark(null);
+    setAreaName(null);
     setNarrative(null);
     setSources([]);
     setUsedLLM(false);
@@ -89,19 +91,26 @@ export default function Home() {
           return r.narrative;
         },
         scoreLandmarksSignificance, // Pass significance scoring function
-        30 // Significance threshold (0-100)
+        30, // Significance threshold (0-100)
+        async (coords) => {
+          const r = await fetchAreaNarrative(coords);
+          setSources(r.sources || []);
+          setUsedLLM(!!r.usedLLM);
+          return { narrative: r.narrative, areaName: r.areaName };
+        }
       );
 
       if (!result) {
         setLocationStatus('error');
         setLocationError(
-          'No interesting landmarks found nearby. Try moving to a different location.'
+          'Unable to generate tour information for this location. Please try again.'
         );
         setIsLoading(false);
         return;
       }
 
       setCurrentLandmark(result.landmark);
+      setAreaName(result.areaName || null);
       setNarrative(result.narrative);
 
       // Start audio narration
@@ -148,6 +157,7 @@ export default function Home() {
     setIsPlaying(false);
     setIsPaused(false);
     setCurrentLandmark(null);
+    setAreaName(null);
     setNarrative(null);
     setSources([]);
     setUsedLLM(false);
@@ -174,9 +184,16 @@ export default function Home() {
 
       <LocationStatus status={locationStatus} errorMessage={locationError} />
 
-      <LandmarkCard landmark={currentLandmark} />
+      {currentLandmark ? (
+        <LandmarkCard landmark={currentLandmark} />
+      ) : areaName ? (
+        <div className="mt-6 max-w-2xl mx-auto bg-gray-800/50 backdrop-blur-sm rounded-lg p-6 border border-gray-700">
+          <h2 className="text-2xl font-semibold text-white mb-2">{areaName}</h2>
+          <p className="text-gray-300 text-sm">Area Information</p>
+        </div>
+      ) : null}
 
-      {currentLandmark && sources.length > 0 && (
+      {(currentLandmark || areaName) && sources.length > 0 && (
         <div className="mt-3 text-center max-w-2xl mx-auto">
           <p className="text-xs text-gray-500">
             {usedLLM ? 'Generated with LLM using public sources:' : 'Public sources found:'}

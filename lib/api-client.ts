@@ -89,3 +89,25 @@ export async function scoreLandmarksSignificance(
     return landmarks.map((landmark) => ({ landmark, score: 0 }));
   }
 }
+
+/**
+ * Fetch area narrative when no landmarks are found
+ */
+export async function fetchAreaNarrative(coordinates: { lat: number; lng: number }): Promise<{
+  narrative: string;
+  sources: NarrativeSource[];
+  usedLLM: boolean;
+  areaName?: string;
+}> {
+  try {
+    const response = await axios.post('/api/area', { coordinates });
+    return response.data;
+  } catch (error) {
+    if (axios.isAxiosError(error)) {
+      const errorMessage =
+        error.response?.data?.error || error.message || 'Failed to generate area narrative';
+      throw new Error(errorMessage);
+    }
+    throw error;
+  }
+}

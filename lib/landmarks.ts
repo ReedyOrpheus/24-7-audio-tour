@@ -165,6 +165,7 @@ function getCategoryContext(category: string): string {
  * @param generateNarrative - Optional function to generate narrative
  * @param scoreSignificance - Function to score landmarks for significance (batch scoring)
  * @param significanceThreshold - Minimum significance score required (default: 30)
+ * @param fetchAreaNarrative - Optional function to fetch area narrative when no landmarks found
  */
 export async function findBestNearbyLandmark(
   coordinates: { lat: number; lng: number },
@@ -172,12 +173,27 @@ export async function findBestNearbyLandmark(
   fetchLandmarks: (coords: { lat: number; lng: number }, rad: number) => Promise<Landmark[]>,
   generateNarrative?: (landmark: Landmark) => Promise<string>,
   scoreSignificance?: (landmarks: Landmark[]) => Promise<Array<{ landmark: Landmark; score: number }>>,
-  significanceThreshold: number = SIGNIFICANCE_THRESHOLD
-): Promise<{ landmark: Landmark; narrative: string } | null> {
+  significanceThreshold: number = SIGNIFICANCE_THRESHOLD,
+  fetchAreaNarrative?: (coords: { lat: number; lng: number }) => Promise<{ narrative: string; areaName?: string }>
+): Promise<{ landmark: Landmark | null; narrative: string; areaName?: string } | null> {
   try {
     const landmarks = await fetchLandmarks(coordinates, radius);
     
     if (landmarks.length === 0) {
+      // No landmarks found at all - try to get area narrative instead
+      if (fetchAreaNarrative) {
+        try {
+          const areaResult = await fetchAreaNarrative(coordinates);
+          return {
+            landmark: null,
+            narrative: areaResult.narrative,
+            areaName: areaResult.areaName,
+          };
+        } catch (err) {
+          console.warn('Failed to fetch area narrative:', err);
+          return null;
+        }
+      }
       return null;
     }
 
@@ -222,6 +238,20 @@ export async function findBestNearbyLandmark(
     }
     
     if (!bestLandmark) {
+      // No landmarks found - try to get area narrative instead
+      if (fetchAreaNarrative) {
+        try {
+          const areaResult = await fetchAreaNarrative(coordinates);
+          return {
+            landmark: null,
+            narrative: areaResult.narrative,
+            areaName: areaResult.areaName,
+          };
+        } catch (err) {
+          console.warn('Failed to fetch area narrative:', err);
+          return null;
+        }
+      }
       return null;
     }
 
