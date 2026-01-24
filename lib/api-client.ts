@@ -38,10 +38,16 @@ export async function fetchNarrative(landmark: Landmark): Promise<{
   sources: NarrativeSource[];
   usedLLM: boolean;
 }> {
+  const startTime = performance.now();
+  console.log(`[PERF] [CLIENT] fetchNarrative started for: ${landmark.name}`);
   try {
     const response = await axios.post('/api/narrative', { landmark });
+    const duration = performance.now() - startTime;
+    console.log(`[PERF] [CLIENT] fetchNarrative completed in ${duration.toFixed(2)}ms`);
     return response.data;
   } catch (error) {
+    const duration = performance.now() - startTime;
+    console.log(`[PERF] [CLIENT] fetchNarrative FAILED after ${duration.toFixed(2)}ms`);
     if (axios.isAxiosError(error)) {
       const errorMessage =
         error.response?.data?.error || error.message || 'Failed to generate narrative';

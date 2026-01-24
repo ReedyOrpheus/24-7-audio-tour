@@ -82,12 +82,15 @@ function dedupeSources(sources: NarrativeSource[]): NarrativeSource[] {
 }
 
 async function fetchWikipediaContext(query: string): Promise<NarrativeSource[]> {
+  const startTime = Date.now();
+  console.log(`[PERF] Wikipedia fetch started for query: ${query}`);
   try {
     // Wikipedia API (no key). Reduced to 2 top hits for faster fetching.
     const searchUrl =
       'https://en.wikipedia.org/w/api.php?action=query&list=search&format=json&srlimit=2&srsearch=' +
       encodeURIComponent(query);
 
+    const searchStart = Date.now();
     const searchRes = await fetchWithTimeout(searchUrl, {
       headers: { Accept: 'application/json' },
       timeout: SOURCE_FETCH_TIMEOUT_MS,
@@ -98,11 +101,16 @@ async function fetchWikipediaContext(query: string): Promise<NarrativeSource[]> 
     if (!searchRes.ok) return [];
     const searchJson = (await searchRes.json()) as any;
     const results = searchJson?.query?.search as Array<{ title: string }> | undefined;
-    if (!results || results.length === 0) return [];
+    if (!results || results.length === 0) {
+      console.log(`[PERF] Wikipedia search completed in ${Date.now() - searchStart}ms - no results`);
+      return [];
+    }
+    console.log(`[PERF] Wikipedia search completed in ${Date.now() - searchStart}ms - found ${results.length} results`);
 
     const sources: NarrativeSource[] = [];
 
     // Fetch summaries in parallel for better performance
+    const summaryStart = Date.now();
     const summaryPromises = results.slice(0, 2).map(async (r) => {
       const title = r.title;
       if (!title) return null;
@@ -146,14 +154,20 @@ async function fetchWikipediaContext(query: string): Promise<NarrativeSource[]> 
     });
 
     const summaryResults = await Promise.all(summaryPromises);
-    return summaryResults.filter((s): s is NarrativeSource => s !== null && s !== undefined);
+    const filteredResults = summaryResults.filter((s): s is NarrativeSource => s !== null && s !== undefined);
+    console.log(`[PERF] Wikipedia summaries fetched in ${Date.now() - summaryStart}ms - got ${filteredResults.length} sources`);
+    console.log(`[PERF] Wikipedia fetch TOTAL: ${Date.now() - startTime}ms`);
+    return filteredResults;
   } catch (error) {
+    console.log(`[PERF] Wikipedia fetch FAILED after ${Date.now() - startTime}ms:`, error instanceof Error ? error.message : 'Unknown error');
     // Return empty array on timeout or error
     return [];
   }
 }
 
 async function fetchOpenStreetMapContext(landmark: Landmark): Promise<NarrativeSource[]> {
+  const startTime = Date.now();
+  console.log(`[PERF] OpenStreetMap fetch started for ${landmark.name}`);
   try {
     // Nominatim usage policy asks for a proper User-Agent identifying the application.
     // Keep requests minimal and cache.
@@ -217,20 +231,25 @@ async function fetchOpenStreetMapContext(landmark: Landmark): Promise<NarrativeS
     extratags: selectedExtras,
   };
 
-    return [
+    const result = [
       {
         title: 'OpenStreetMap (Nominatim)',
         url: osmUrl,
         excerpt: JSON.stringify(excerptObj),
       },
     ];
+    console.log(`[PERF] OpenStreetMap fetch completed in ${Date.now() - startTime}ms`);
+    return result;
   } catch (error) {
+    console.log(`[PERF] OpenStreetMap fetch FAILED after ${Date.now() - startTime}ms:`, error instanceof Error ? error.message : 'Unknown error');
     // Return empty array on timeout or error
     return [];
   }
 }
 
 async function fetchWikidataContext(query: string): Promise<NarrativeSource[]> {
+  const startTime = Date.now();
+  console.log(`[PERF] Wikidata fetch started for query: ${query}`);
   try {
     const searchUrl =
       'https://www.wikidata.org/w/api.php?action=wbsearchentities&format=json&language=en&limit=1&search=' +
@@ -269,8 +288,10 @@ async function fetchWikidataContext(query: string): Promise<NarrativeSource[]> {
       });
     }
 
+    console.log(`[PERF] Wikidata fetch completed in ${Date.now() - startTime}ms - got ${out.length} sources`);
     return out;
   } catch (error) {
+    console.log(`[PERF] Wikidata fetch FAILED after ${Date.now() - startTime}ms:`, error instanceof Error ? error.message : 'Unknown error');
     // Return empty array on timeout or error - Wikidata is optional
     return [];
   }
@@ -280,6 +301,8 @@ async function generateWithOpenAI(args: {
   landmark: Landmark;
   sources: NarrativeSource[];
 }): Promise<string> {
+  const startTime = Date.now();
+  console.log(`[PERF] LLM generation started for ${args.landmark.name} with ${args.sources.length} sources`);
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) {
     throw new Error('OPENAI_API_KEY is not configured');
@@ -330,6 +353,7 @@ async function generateWithOpenAI(args: {
   const timeoutId = setTimeout(() => controller.abort(), LLM_GENERATION_TIMEOUT_MS);
 
   try {
+    const apiCallStart = Date.now();
     const res = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -361,17 +385,26 @@ async function generateWithOpenAI(args: {
       throw new Error('OpenAI response did not contain message content');
     }
 
+    const apiCallTime = Date.now() - apiCallStart;
+    const totalTime = Date.now() - startTime;
+    console.log(`[PERF] LLM API call completed in ${apiCallTime}ms`);
+    console.log(`[PERF] LLM generation TOTAL: ${totalTime}ms (narrative length: ${content.trim().length} chars)`);
     return content.trim();
   } catch (error) {
     clearTimeout(timeoutId);
+    const totalTime = Date.now() - startTime;
     if (error instanceof Error && error.name === 'AbortError') {
+      console.log(`[PERF] LLM generation TIMEOUT after ${totalTime}ms`);
       throw new Error(`LLM generation timeout after ${LLM_GENERATION_TIMEOUT_MS}ms`);
     }
+    console.log(`[PERF] LLM generation FAILED after ${totalTime}ms:`, error instanceof Error ? error.message : 'Unknown error');
     throw error;
   }
 }
 
 export async function POST(request: NextRequest) {
+  const requestStartTime = Date.now();
+  console.log(`[PERF] ========== Narrative API Request Started ==========`);
   try {
     const body = await request.json().catch(() => null);
     const landmark = safeJson<{ landmark?: Landmark }>(body)?.landmark;
@@ -383,20 +416,28 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    console.log(`[PERF] Processing narrative for: ${landmark.name}`);
+
     const query = buildWikipediaQuery(landmark);
     
     // Fetch sources in parallel - each has its own timeout, so slow ones won't block
+    const sourcesStartTime = Date.now();
     const [wikiSources, osmSources, wikidataSources] = await Promise.all([
       fetchWikipediaContext(query),
       fetchOpenStreetMapContext(landmark),
       fetchWikidataContext(query),
     ]);
+    const sourcesTime = Date.now() - sourcesStartTime;
+    console.log(`[PERF] All sources fetched in ${sourcesTime}ms (Wiki: ${wikiSources.length}, OSM: ${osmSources.length}, Wikidata: ${wikidataSources.length})`);
 
     const sources = dedupeSources([...wikiSources, ...osmSources, ...wikidataSources]);
+    console.log(`[PERF] Deduplicated sources: ${sources.length} total`);
 
     // Try LLM first (for variability + richer writing), but always provide a fallback.
     try {
       const narrative = await generateWithOpenAI({ landmark, sources });
+      const totalTime = Date.now() - requestStartTime;
+      console.log(`[PERF] ========== Narrative API Request COMPLETED in ${totalTime}ms ==========`);
       const response: NarrativeResponse = {
         narrative,
         sources: sources.map(({ title, url }) => ({ title, url })),
@@ -404,15 +445,23 @@ export async function POST(request: NextRequest) {
       };
       return NextResponse.json(response);
     } catch (err) {
-      console.warn('LLM narrative generation failed; falling back to template:', err);
+      const fallbackStart = Date.now();
+      console.warn('[PERF] LLM narrative generation failed; falling back to template:', err);
+      const narrative = generateLandmarkNarrative(landmark);
+      const fallbackTime = Date.now() - fallbackStart;
+      const totalTime = Date.now() - requestStartTime;
+      console.log(`[PERF] Fallback narrative generated in ${fallbackTime}ms`);
+      console.log(`[PERF] ========== Narrative API Request COMPLETED (fallback) in ${totalTime}ms ==========`);
       const response: NarrativeResponse = {
-        narrative: generateLandmarkNarrative(landmark),
+        narrative,
         sources: sources.map(({ title, url }) => ({ title, url })),
         usedLLM: false,
       };
       return NextResponse.json(response);
     }
   } catch (error) {
+    const totalTime = Date.now() - requestStartTime;
+    console.error(`[PERF] ========== Narrative API Request FAILED after ${totalTime}ms ==========`);
     console.error('Error generating narrative:', error);
     const errorMessage =
       error instanceof Error ? error.message : 'Unknown error occurred';

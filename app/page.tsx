@@ -7,6 +7,7 @@ import PlayButton from '@/components/PlayButton';
 import LocationStatus from '@/components/LocationStatus';
 import LandmarkCard from '@/components/LandmarkCard';
 import AudioPlayer from '@/components/AudioPlayer';
+import PerformanceDebug from '@/components/PerformanceDebug';
 import { getCurrentLocation } from '@/lib/geolocation';
 import { findBestNearbyLandmark } from '@/lib/landmarks';
 import { fetchNearbyLandmarks, fetchNarrative, scoreLandmarksSignificance, fetchAreaNarrative, NarrativeSource } from '@/lib/api-client';
@@ -45,6 +46,9 @@ export default function Home() {
   }, [isPlaying]);
 
   const handlePlayClick = async () => {
+    const overallStartTime = performance.now();
+    console.log(`[PERF] ========== [CLIENT] TOUR START - Button Clicked ==========`);
+
     // iOS Safari: unlock speech synthesis while we're still inside the user tap.
     primeTTS();
 
@@ -72,14 +76,20 @@ export default function Home() {
 
     try {
       // Get current location
+      const locationStart = performance.now();
+      console.log(`[PERF] [CLIENT] Getting location...`);
       const coordinates = await getCurrentLocation({
         enableHighAccuracy: true,
         timeout: 10000,
       });
+      const locationTime = performance.now() - locationStart;
+      console.log(`[PERF] [CLIENT] Location obtained in ${locationTime.toFixed(2)}ms`);
 
       setLocationStatus('found');
 
       // Find nearby landmark using API route with significance scoring
+      const landmarkStart = performance.now();
+      console.log(`[PERF] [CLIENT] Finding nearby landmark...`);
       const result = await findBestNearbyLandmark(
         coordinates,
         1000,
@@ -99,6 +109,8 @@ export default function Home() {
           return { narrative: r.narrative, areaName: r.areaName };
         }
       );
+      const landmarkTime = performance.now() - landmarkStart;
+      console.log(`[PERF] [CLIENT] Landmark found in ${landmarkTime.toFixed(2)}ms`);
 
       if (!result) {
         setLocationStatus('error');
@@ -117,16 +129,24 @@ export default function Home() {
       setIsPlaying(true);
       setIsPaused(false);
 
+      const audioStart = performance.now();
+      console.log(`[PERF] [CLIENT] Starting audio playback...`);
       await speakText(result.narrative, {
         voice: 'marin', // Uses OpenAI TTS 'nova' voice (marin maps to nova)
         rate: 0.95,
         pitch: 1.0,
         volume: 1.0,
       });
+      const audioTime = performance.now() - audioStart;
+      const totalTime = performance.now() - overallStartTime;
+      console.log(`[PERF] [CLIENT] Audio playback started in ${audioTime.toFixed(2)}ms`);
+      console.log(`[PERF] ========== [CLIENT] TOUR COMPLETE - Total time: ${totalTime.toFixed(2)}ms ==========`);
 
       setIsPlaying(false);
       setIsPaused(false);
     } catch (error) {
+      const totalTime = performance.now() - overallStartTime;
+      console.error(`[PERF] ========== [CLIENT] TOUR FAILED after ${totalTime.toFixed(2)}ms ==========`);
       console.error('Error starting tour:', error);
       
       const errorMessage =
@@ -223,6 +243,8 @@ export default function Home() {
         onResume={handleResume}
         onStop={handleStop}
       />
+
+      <PerformanceDebug />
     </main>
   );
 }

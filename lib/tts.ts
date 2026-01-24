@@ -54,6 +54,8 @@ export function speakText(
       const voice = options.voice === 'marin' ? 'nova' : (options.voice || 'nova');
 
       // Fetch audio from API route
+      const fetchStart = performance.now();
+      console.log(`[PERF] [CLIENT] TTS fetch started (text length: ${text.length} chars)`);
       const response = await fetch('/api/tts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -62,20 +64,26 @@ export function speakText(
           voice,
         }),
       });
+      const fetchTime = performance.now() - fetchStart;
+      console.log(`[PERF] [CLIENT] TTS fetch completed in ${fetchTime.toFixed(2)}ms`);
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-        console.warn('OpenAI TTS failed, falling back to browser TTS:', errorData.error);
+        console.warn(`[PERF] [CLIENT] OpenAI TTS failed after ${fetchTime.toFixed(2)}ms, falling back to browser TTS:`, errorData.error);
         
         // Fallback to browser speech synthesis
         return fallbackToBrowserTTS(text, options, resolve, reject);
       }
 
       // Create audio blob URL
+      const blobStart = performance.now();
       const audioBlob = await response.blob();
+      const blobTime = performance.now() - blobStart;
+      console.log(`[PERF] [CLIENT] Audio blob created in ${blobTime.toFixed(2)}ms (size: ${audioBlob.size} bytes)`);
       audioBlobUrl = URL.createObjectURL(audioBlob);
 
       // Create and play audio element
+      const audioStart = performance.now();
       const audio = new Audio(audioBlobUrl);
       currentAudio = audio;
 
@@ -108,7 +116,12 @@ export function speakText(
       // Start playback
       isSpeaking = true;
       isPaused = false;
+      const playStart = performance.now();
       await audio.play();
+      const playTime = performance.now() - playStart;
+      const totalTime = performance.now() - fetchStart;
+      console.log(`[PERF] [CLIENT] Audio play() called in ${playTime.toFixed(2)}ms`);
+      console.log(`[PERF] [CLIENT] TTS TOTAL (fetch to play): ${totalTime.toFixed(2)}ms`);
     } catch (error) {
       console.warn('OpenAI TTS error, falling back to browser TTS:', error);
       // Fallback to browser speech synthesis

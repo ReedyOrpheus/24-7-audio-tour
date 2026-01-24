@@ -36,6 +36,8 @@ async function fetchWithTimeout(
  * This keeps the API key secure on the server side
  */
 export async function POST(request: NextRequest) {
+  const requestStartTime = Date.now();
+  console.log(`[PERF] ========== TTS API Request Started ==========`);
   try {
     const body = await request.json().catch(() => null);
     const text = body?.text;
@@ -47,6 +49,8 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
+
+    console.log(`[PERF] TTS request: text length=${text.length} chars, voice=${voice}`);
 
     const apiKey = process.env.OPENAI_API_KEY?.trim();
     if (!apiKey) {
@@ -64,6 +68,7 @@ export async function POST(request: NextRequest) {
       : 'nova'; // Default to 'nova' if invalid voice specified
 
     // Call OpenAI TTS API with timeout
+    const apiCallStart = Date.now();
     const response = await fetchWithTimeout('https://api.openai.com/v1/audio/speech', {
       method: 'POST',
       headers: {
@@ -78,8 +83,13 @@ export async function POST(request: NextRequest) {
       }),
     });
 
+    const apiCallTime = Date.now() - apiCallStart;
+    console.log(`[PERF] TTS API call completed in ${apiCallTime}ms`);
+
     if (!response.ok) {
       const errorText = await response.text().catch(() => 'Unknown error');
+      const totalTime = Date.now() - requestStartTime;
+      console.error(`[PERF] ========== TTS API Request FAILED after ${totalTime}ms ==========`);
       console.error('OpenAI TTS API error:', response.status, errorText);
       return NextResponse.json(
         { error: `OpenAI TTS failed: ${response.status} ${errorText}` },
@@ -88,7 +98,12 @@ export async function POST(request: NextRequest) {
     }
 
     // Return the audio as a blob
+    const bufferStart = Date.now();
     const audioBuffer = await response.arrayBuffer();
+    const bufferTime = Date.now() - bufferStart;
+    const totalTime = Date.now() - requestStartTime;
+    console.log(`[PERF] Audio buffer processed in ${bufferTime}ms (size: ${audioBuffer.byteLength} bytes)`);
+    console.log(`[PERF] ========== TTS API Request COMPLETED in ${totalTime}ms ==========`);
     return new NextResponse(audioBuffer, {
       headers: {
         'Content-Type': 'audio/mpeg',
@@ -96,6 +111,8 @@ export async function POST(request: NextRequest) {
       },
     });
   } catch (error) {
+    const totalTime = Date.now() - requestStartTime;
+    console.error(`[PERF] ========== TTS API Request FAILED after ${totalTime}ms ==========`);
     console.error('TTS generation error:', error);
     const errorMessage =
       error instanceof Error ? error.message : 'Unknown error occurred';

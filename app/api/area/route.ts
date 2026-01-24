@@ -138,6 +138,8 @@ async function generateAreaNarrativeWithOpenAI(args: {
   displayName: string;
   sources: AreaSource[];
 }): Promise<string> {
+  const startTime = Date.now();
+  console.log(`[PERF] Area LLM generation started for ${args.areaName} with ${args.sources.length} sources`);
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) {
     throw new Error('OPENAI_API_KEY is not configured');
@@ -187,6 +189,7 @@ async function generateAreaNarrativeWithOpenAI(args: {
     .filter(Boolean)
     .join('\n');
 
+  const apiCallStart = Date.now();
   const res = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -204,8 +207,13 @@ async function generateAreaNarrativeWithOpenAI(args: {
     }),
   });
 
+  const apiCallTime = Date.now() - apiCallStart;
+  console.log(`[PERF] Area LLM API call completed in ${apiCallTime}ms`);
+
   if (!res.ok) {
     const text = await res.text().catch(() => '');
+    const totalTime = Date.now() - startTime;
+    console.log(`[PERF] Area LLM generation FAILED after ${totalTime}ms`);
     throw new Error(`OpenAI request failed: ${res.status} ${res.statusText} ${text}`);
   }
 
@@ -215,6 +223,8 @@ async function generateAreaNarrativeWithOpenAI(args: {
     throw new Error('OpenAI response did not contain message content');
   }
 
+  const totalTime = Date.now() - startTime;
+  console.log(`[PERF] Area LLM generation TOTAL: ${totalTime}ms (narrative length: ${content.trim().length} chars)`);
   return content.trim();
 }
 
@@ -226,6 +236,8 @@ function generateFallbackAreaNarrative(areaName: string, address: Record<string,
 }
 
 export async function POST(request: NextRequest) {
+  const requestStartTime = Date.now();
+  console.log(`[PERF] ========== Area Narrative API Request Started ==========`);
   try {
     const body = await request.json().catch(() => null);
     const coordinates = safeJson<{ coordinates?: { lat: number; lng: number } }>(body)?.coordinates;
@@ -237,8 +249,15 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const areaInfoStart = Date.now();
     const { areaName, address, displayName } = await fetchAreaInfo(coordinates);
+    const areaInfoTime = Date.now() - areaInfoStart;
+    console.log(`[PERF] Area info fetched in ${areaInfoTime}ms: ${areaName}`);
+
+    const wikiStart = Date.now();
     const wikiSources = await fetchWikipediaAreaContext(areaName, address);
+    const wikiTime = Date.now() - wikiStart;
+    console.log(`[PERF] Wikipedia area context fetched in ${wikiTime}ms - got ${wikiSources.length} sources`);
 
     // Try LLM first, but always provide a fallback
     try {
@@ -248,6 +267,8 @@ export async function POST(request: NextRequest) {
         displayName,
         sources: wikiSources,
       });
+      const totalTime = Date.now() - requestStartTime;
+      console.log(`[PERF] ========== Area Narrative API Request COMPLETED in ${totalTime}ms ==========`);
       const response: AreaResponse = {
         narrative,
         sources: wikiSources.map(({ title, url }) => ({ title, url })),
@@ -256,9 +277,15 @@ export async function POST(request: NextRequest) {
       };
       return NextResponse.json(response);
     } catch (err) {
-      console.warn('LLM area narrative generation failed; falling back to template:', err);
+      const fallbackStart = Date.now();
+      console.warn('[PERF] LLM area narrative generation failed; falling back to template:', err);
+      const narrative = generateFallbackAreaNarrative(areaName, address);
+      const fallbackTime = Date.now() - fallbackStart;
+      const totalTime = Date.now() - requestStartTime;
+      console.log(`[PERF] Fallback area narrative generated in ${fallbackTime}ms`);
+      console.log(`[PERF] ========== Area Narrative API Request COMPLETED (fallback) in ${totalTime}ms ==========`);
       const response: AreaResponse = {
-        narrative: generateFallbackAreaNarrative(areaName, address),
+        narrative,
         sources: wikiSources.map(({ title, url }) => ({ title, url })),
         usedLLM: false,
         areaName,
@@ -266,6 +293,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(response);
     }
   } catch (error) {
+    const totalTime = Date.now() - requestStartTime;
+    console.error(`[PERF] ========== Area Narrative API Request FAILED after ${totalTime}ms ==========`);
     console.error('Error generating area narrative:', error);
     const errorMessage =
       error instanceof Error ? error.message : 'Unknown error occurred';
